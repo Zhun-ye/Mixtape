@@ -120,7 +120,7 @@ jobs:
           test -d "$app_path"
           test -f "$app_path/Frameworks/MobileVLCKit.framework/MobileVLCKit"
           test -x "$app_path/Mixtape"
-          xcrun lipo -verify_arch arm64 "$app_path/Mixtape"
+          xcrun lipo "$app_path/Mixtape" -verify_arch arm64
           mkdir -p "$RUNNER_TEMP/ipa/Payload" build
           ditto "$app_path" "$RUNNER_TEMP/ipa/Payload/Mixtape.app"
           ditto -c -k --keepParent "$RUNNER_TEMP/ipa/Payload" build/Mixtape-unsigned.ipa
