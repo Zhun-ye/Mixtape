@@ -36,10 +36,6 @@ jobs:
           set -euo pipefail
           xcodebuild -version
           xcrun --sdk iphoneos --show-sdk-version
-          if ! command -v carthage >/dev/null 2>&1; then
-            HOMEBREW_NO_AUTO_UPDATE=1 brew install carthage
-          fi
-          carthage version
 
       - name: Cache VLC frameworks
         id: vlc-cache
@@ -52,7 +48,24 @@ jobs:
         if: steps.vlc-cache.outputs.cache-hit != 'true'
         run: |
           set -euo pipefail
-          carthage bootstrap --use-xcframeworks --platform macOS,iOS --cache-builds
+          # Use the official archives matching Cartfile.resolved. The GitLab
+          # manifest endpoint can return an HTML page to hosted CI runners.
+          grep -q 'MobileVLCKit.json" "3.7.2"' Cartfile.resolved
+          grep -q 'Packaging/VLCKit.json" "3.7.2"' Cartfile.resolved
+          mkdir -p Carthage/Build
+          for framework_name in MobileVLCKit VLCKit; do
+            archive_path="$RUNNER_TEMP/${framework_name}.tar.xz"
+            extract_path="$RUNNER_TEMP/vlc/$framework_name"
+            archive_url="https://download.videolan.org/pub/cocoapods/prod/${framework_name}-3.7.2-3e42ae47-79128878.tar.xz"
+            echo "Downloading ${framework_name} 3.7.2 from VideoLAN"
+            curl --fail --location --retry 3 --silent --show-error \
+              "$archive_url" --output "$archive_path"
+            mkdir -p "$extract_path"
+            tar -xf "$archive_path" -C "$extract_path"
+            framework_path="$(find "$extract_path" -type d -name "$framework_name.xcframework" -print -quit)"
+            test -n "$framework_path"
+            ditto "$framework_path" "Carthage/Build/$framework_name.xcframework"
+          done
 
       - name: Verify iOS framework
         run: |
