@@ -1,0 +1,158 @@
+name: Build unsigned iOS IPA
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - .github/workflows/build-ipa.yml
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ios-ipa-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Build Mixtape for iPhone and iPad
+    runs-on: macos-26
+    timeout-minutes: 60
+    env:
+      DEVELOPER_DIR: /Applications/Xcode_26.2.app/Contents/Developer
+
+    defaults:
+      run:
+        shell: bash
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Check build tools
+        run: |
+          set -euo pipefail
+          xcodebuild -version
+          xcrun --sdk iphoneos --show-sdk-version
+          if ! command -v carthage >/dev/null 2>&1; then
+            HOMEBREW_NO_AUTO_UPDATE=1 brew install carthage
+          fi
+          carthage version
+
+      - name: Cache VLC frameworks
+        id: vlc-cache
+        uses: actions/cache@v6
+        with:
+          path: Carthage/Build
+          key: vlc-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('Cartfile', 'Cartfile.resolved') }}
+
+      - name: Fetch VLC frameworks
+        if: steps.vlc-cache.outputs.cache-hit != 'true'
+        run: |
+          set -euo pipefail
+          carthage bootstrap --use-xcframeworks --platform macOS,iOS --cache-builds
+
+      - name: Verify iOS framework
+        run: |
+          set -euo pipefail
+          test -d Carthage/Build/MobileVLCKit.xcframework
+
+      - name: Cache Swift packages
+        uses: actions/cache@v6
+        with:
+          path: ${{ runner.temp }}/SourcePackages
+          key: spm-${{ runner.os }}-${{ runner.arch }}-xcode26.2-${{ hashFiles('**/Package.resolved') }}
+
+      - name: Resolve Swift packages
+        run: |
+          set -euo pipefail
+          xcodebuild -resolvePackageDependencies \
+            -project Mixtape.xcodeproj \
+            -scheme Mixtape \
+            -clonedSourcePackagesDirPath "$RUNNER_TEMP/SourcePackages" \
+            -skipMacroValidation \
+            -skipPackagePluginValidation \
+            2>&1 | tee "$RUNNER_TEMP/package-resolution.log"
+
+      - name: Archive unsigned iOS app
+        run: |
+          set -euo pipefail
+          xcodebuild archive \
+            -project Mixtape.xcodeproj \
+            -scheme Mixtape \
+            -configuration Release \
+            -sdk iphoneos \
+            -destination 'generic/platform=iOS' \
+            -archivePath "$RUNNER_TEMP/Mixtape.xcarchive" \
+            -derivedDataPath "$RUNNER_TEMP/DerivedData" \
+            -clonedSourcePackagesDirPath "$RUNNER_TEMP/SourcePackages" \
+            -resultBundlePath "$RUNNER_TEMP/Mixtape.xcresult" \
+            -skipMacroValidation \
+            -skipPackagePluginValidation \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY= \
+            CODE_SIGN_ENTITLEMENTS= \
+            DEVELOPMENT_TEAM= \
+            ARCHS=arm64 \
+            ONLY_ACTIVE_ARCH=NO \
+            2>&1 | tee "$RUNNER_TEMP/xcodebuild.log"
+
+      - name: Package and inspect IPA
+        run: |
+          set -euo pipefail
+          app_path="$RUNNER_TEMP/Mixtape.xcarchive/Products/Applications/Mixtape.app"
+          test -d "$app_path"
+          test -f "$app_path/Frameworks/MobileVLCKit.framework/MobileVLCKit"
+          test -x "$app_path/Mixtape"
+          xcrun lipo -verify_arch arm64 "$app_path/Mixtape"
+          mkdir -p "$RUNNER_TEMP/ipa/Payload" build
+          ditto "$app_path" "$RUNNER_TEMP/ipa/Payload/Mixtape.app"
+          ditto -c -k --keepParent "$RUNNER_TEMP/ipa/Payload" build/Mixtape-unsigned.ipa
+          unzip -tq build/Mixtape-unsigned.ipa
+          (
+            cd build
+            shasum -a 256 Mixtape-unsigned.ipa > Mixtape-unsigned.ipa.sha256
+          )
+          {
+            echo '## Mixtape unsigned IPA'
+            echo
+            echo "Source commit: $GITHUB_SHA"
+            echo
+            echo 'Minimum system: iOS / iPadOS 26.1.'
+            echo
+            echo 'Download the Mixtape-unsigned-IPA artifact below and extract the IPA.'
+            echo 'The IPA must be signed with your own Apple account before installation.'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload IPA
+        id: ipa
+        uses: actions/upload-artifact@v7
+        with:
+          name: Mixtape-unsigned-IPA
+          path: |
+            build/Mixtape-unsigned.ipa
+            build/Mixtape-unsigned.ipa.sha256
+          if-no-files-found: error
+          retention-days: 30
+          compression-level: 0
+
+      - name: Link download in summary
+        env:
+          ARTIFACT_URL: ${{ steps.ipa.outputs.artifact-url }}
+        run: |
+          printf '\n[Download IPA artifact](%s)\n' "$ARTIFACT_URL" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload build logs
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: Mixtape-build-logs
+          path: |
+            ${{ runner.temp }}/package-resolution.log
+            ${{ runner.temp }}/xcodebuild.log
+            ${{ runner.temp }}/Mixtape.xcresult
+          if-no-files-found: ignore
+          retention-days: 7
