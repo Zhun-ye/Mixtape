@@ -6,7 +6,7 @@ Accepted
 
 ## Context
 
-Prior to commit `d7177f8`, each coordinator (HomeCoordinator, SearchCoordinator, LibraryCoordinator, DiscoveryCoordinator) had:
+Before this cleanup, each coordinator (HomeCoordinator, SearchCoordinator, LibraryCoordinator, DiscoveryCoordinator) had:
 
 1. **Duplicated delegate implementations** - Each coordinator implemented the same navigation delegate methods (`didSelectPlaylist`, `didSelectArtist`, `didSelectAlbum`, etc.) with identical logic
 2. **Duplicated `makeDestination` logic** - Each coordinator had its own switch statement creating ViewModels
@@ -28,7 +28,7 @@ Consolidate all shared coordinator behavior into the `Coordinatable` protocol wi
 | `HomeCoordinator.swift` | Reduced from ~160 lines to ~42 lines |
 | `SearchCoordinator.swift` | Reduced from ~140 lines to ~45 lines |
 | `LibraryCoordinator.swift` | Reduced from ~150 lines to ~50 lines |
-| `DiscoveryCoordinator.swift` | Reduced from ~200 lines to ~50 lines |
+| `Discover/DiscoveryCoordinator.swift` | Reduced from ~200 lines to ~50 lines |
 
 ### Protocol Changes
 
@@ -38,7 +38,7 @@ protocol CoordinatorDelegate: AnyObject {
     func didRequestSettings()
 }
 
-protocol Coordinatable: HashableObject {
+protocol Coordinatable: CoordinatorHashable {
     var path: [Destination] { get set }
     var root: Destination { get set }
     func makeDestination(for route: Route) -> Destination
@@ -70,7 +70,7 @@ protocol CoordinatableDelegate: AnyObject {
     func didRequestSettings()
 }
 
-protocol Coordinatable: HashableObject,
+protocol Coordinatable: CoordinatorHashable,
     CoordinatableDelegate,
     SignInRedirectorViewModelDelegate {
 
@@ -86,7 +86,7 @@ protocol Coordinatable: HashableObject,
 **Before (HomeCoordinator):**
 ```swift
 @MainActor @Observable
-final class HomeCoordinator: HashableObject {
+final class HomeCoordinator: CoordinatorHashable {
     let homeViewModel: HomeViewModel
     var root: Destination = .none
     var path: [Destination] = []
@@ -149,6 +149,10 @@ final class HomeCoordinator: @MainActor Coordinatable {
 2. **Renamed `.explore` to `.discovery`** - Consistent naming with DiscoveryViewModel
 3. **Added `Route.moods`** - `didSelectMoodsAndGenres()` now uses `navigate(to:)` pattern
 4. **Removed `import Foundation`** - SwiftUI covers required types
+
+### Later Additions
+
+`CoordinatableDelegate.didSelectDownloads()` and the `.downloads` case on `Route` and `Destination` were added afterwards (`Coordinators/Coordinatable.swift:45`, `Coordinators/Route.swift:21`, `Coordinators/Destination.swift:34`).
 
 ## Migration Guide
 

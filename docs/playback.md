@@ -1,330 +1,72 @@
-# Playback System
+# Playback
 
-This document details the WebView-based playback system, its architecture, and implementation notes.
+Mixtape has three interchangeable audio engines behind one protocol. `PlayerManager` owns playback state (track, queue, shuffle/repeat, progress, volume) and delegates audio to whichever engine is selected.
 
-## Overview
-
-YouTube Music uses DRM (Widevine) to protect Premium content. Native playback via AVPlayer is not possible because:
-
-1. **Bot Detection**: YouTube's APIs detect non-browser clients and block them
-2. **DRM**: Premium content requires Widevine CDM, only available in WebKit
-3. **User Interaction**: YouTube requires a user gesture to start playback
-
-Our solution: A **singleton WebView** that loads YouTube Music watch pages and plays audio through WebKit's native DRM support.
-
-## Architecture
-
-### Components
-
-| Component | File | Purpose |
-|-----------|------|---------|
-| `SingletonPlayerWebView` | `MiniPlayerWebView.swift` | Manages the one-and-only WebView |
-| `PersistentPlayerView` | `MiniPlayerWebView.swift` | SwiftUI wrapper for the WebView |
-| `PlayerManager` | `PlayerManager.swift` | Playback state and control |
-| `AppDelegate` | `AppDelegate.swift` | Window lifecycle for background audio |
-
-### Singleton Pattern
-
-```swift
-@MainActor
-final class SingletonPlayerWebView {
-    static let shared = SingletonPlayerWebView()
-    
-    private(set) var webView: WKWebView?
-    var currentVideoId: String?
-    
-    func getWebView(webKitManager:, playerService:) -> WKWebView
-    func loadVideo(videoId: String)
-}
+```
+Views / PlayerBar ──► PlayerManager ──► YTMusicPlayer (protocol)
+                           │                 ├── YTMusicWebPlayer    → SingletonPlayerWebView (WKWebView)
+                           │                 ├── YTMusicNativePlayer → StreamFetcher → AVPlayer
+                           │                 └── VLCMusicPlayer      → StreamFetcher → VLCKit
+                           └── downloaded file? → AVPlayer on the local asset
 ```
 
-**Why Singleton?**
-- Prevents multiple audio streams
-- Survives SwiftUI view recreation
-- Survives window close/reopen
-- Single source of truth for playback
+## Engines
 
-## Playback Flow
+| Engine | `AudioPlayerType` | Audio source | Quality | Platforms |
+|---|---|---|---|---|
+| Web Player | `.webView` | `music.youtube.com` in a hidden `WKWebView`; WebKit handles DRM | Up to 300 kbps Opus with YouTube Premium | macOS |
+| Native Player | `.native` | Direct stream URL via `StreamFetcher`, played with `AVPlayer` | ~130 kbps AAC | macOS, iOS |
+| VLC Player | `.vlc` | Direct stream URL via `StreamFetcher`, played with VLCKit / MobileVLCKit | ~160 kbps Opus | macOS, iOS |
 
-### 1. User Initiates Play
+The Web Player is the default on macOS. It is not offered on iOS (`AudioPlayerType.availableCases` returns only `.native` and `.vlc`).
 
-```swift
-// In a view
-playerService.play(videoId: "dQw4w9WgXcQ")
-```
+### Selecting an engine
 
-This sets:
-- `pendingPlayVideoId` = video ID
-- `showMiniPlayer` = `true` (shows toast for user interaction)
+`Container.ytMusicPlayer` returns the engine matching `AppDefaults.shared.audioPlayer`, and `Container.playerManager` injects it with `setAudioPlayer(_:)`. In Settings, `SettingsViewModel.switchPlayer(to:)` calls `PlayerManager.switchPlayer(to:)`, which stops the current engine, swaps in the new one, carries over the volume, saves the choice, and reloads the current track if it was playing. The picker is disabled while a switch is in progress.
 
-### 2. WebView Loads
+### The `YTMusicPlayer` protocol
 
-`MainWindow` observes `pendingPlayVideoId`:
+`Services/Player/YTMusicPlayer.swift` defines what every engine implements: `loadVideo(videoId:)`, `play()`, `pause()`, `seek(to:)`, `setVolume(_:)`, `stop()`, and optionally `next()`/`previous()`. Engines report progress, duration, play state, track end, and audio quality back through callbacks that `PlayerManager` subscribes to.
 
-```swift
-if let videoId = playerService.pendingPlayVideoId {
-    PersistentPlayerView(videoId: videoId, isExpanded: playerService.showMiniPlayer)
-        .frame(width: showMiniPlayer ? 160 : 1, height: showMiniPlayer ? 90 : 1)
-}
-```
+## Web Player
 
-### 3. Video Starts
+`YTMusicWebPlayer` drives `SingletonPlayerWebView` (`Views/SingletonPlayerWebView.swift`), a single `WKWebView` that lives for the app's lifetime:
 
-`PersistentPlayerView` either:
-- Creates new WebView (first play)
-- Reuses existing WebView (subsequent plays)
+- `loadVideo(videoId:)` navigates to `https://music.youtube.com/watch?v={id}`, or reuses the page if it's already loaded.
+- The web view shares `WebKitManager`'s data store, so it is signed in with the same cookies as the API client.
+- An injected script observes the YouTube Music player and posts `STATE_UPDATE` messages (play state, progress, duration, track metadata, like status, audio quality, track end) to the `singletonPlayer` message handler. The coordinator forwards them to `PlayerManager`.
+- Controls (play/pause, next/previous, seek, volume) are sent back by evaluating JavaScript in the page.
+- On macOS the web view is hosted off-screen by `PersistentPlayerView` (`Views/MiniPlayerViews.swift`) and re-parented with `ensureInHierarchy(container:)` so it is never deallocated.
 
-```swift
-func makeNSView(context: Context) -> NSView {
-    let webView = SingletonPlayerWebView.shared.getWebView(...)
-    
-    // Load if different video
-    if SingletonPlayerWebView.shared.currentVideoId != videoId {
-        webView.load(URLRequest(url: watchURL))
-    }
-    
-    return container
-}
-```
+Because the WebView must stay alive, `AppDelegate.windowShouldClose` hides the app instead of closing the window. See [ADR 0001](adr/0001-webview-playback.md).
 
-### 4. State Updates
+**Debugging:** the web view is `isInspectable`; open Safari → Develop → (your Mac) → the music.youtube.com page.
 
-JavaScript observer sends state via `WKScriptMessageHandler`:
+## Native and VLC Players
 
-```javascript
-bridge.postMessage({
-    type: 'STATE_UPDATE',
-    isPlaying: true,
-    progress: 45,
-    duration: 210
-});
-```
+Both use `StreamFetcher` (`Services/Player/StreamFetcher.swift`) to resolve a direct audio URL:
 
-Swift receives and updates `PlayerManager`:
+1. Fetch visitor data (cached) to reduce bot checks.
+2. Call the InnerTube `player` endpoint on `www.youtube.com`, trying clients in order: `ANDROID_VR` → `ANDROID_MUSIC` → `IOS` → `TVHTML5_SIMPLY_EMBEDDED_PLAYER`.
+3. Pick a format with the engine's own `formatSelector` (AAC for `AVPlayer`; VLC prefers Opus, itags 251 → 141 → 250 → 140 → 249) and report its codec and bitrate.
 
-```swift
-func userContentController(_:, didReceive message:) {
-    playerService.updatePlaybackState(
-        isPlaying: isPlaying,
-        progress: progress,
-        duration: duration
-    )
-}
-```
+`YTMusicNativePlayer` plays the URL through `NativePlayerSession`, which wraps `AVPlayer` and observes item status, time-control status, and periodic time updates. `VLCMusicPlayer` does the same with `VLCMediaPlayer`.
 
-## Track Changing
+These engines set `MPNowPlayingInfoCenter` metadata themselves, which drives the lock screen, Control Center, and the macOS Now Playing widget.
 
-When user plays a different track:
+## Downloads
 
-1. `pendingPlayVideoId` changes
-2. SwiftUI calls `updateNSView` (not `makeNSView`)
-3. `SingletonPlayerWebView.loadVideo(videoId:)` called
-4. Current audio paused, new URL loaded
+`DownloadManager` resolves an HLS manifest with `StreamFetcher.fetchHLSManifestURL(videoId:)` and downloads it with `AVAssetDownloadURLSession`. When a downloaded copy exists, `PlayerManager.play(song:)` plays the local asset with `AVPlayer` regardless of the selected engine.
 
-```swift
-func loadVideo(videoId: String) {
-    guard videoId != currentVideoId else { return }
-    
-    // Update ID immediately to prevent duplicate loads
-    currentVideoId = videoId
-    
-    // Pause current, load new
-    webView.evaluateJavaScript("document.querySelector('video')?.pause()") { _, _ in
-        self.webView?.load(URLRequest(url: watchURL))
-    }
-}
-```
+## Queue
+
+`PlayerManager` owns the queue (`playQueue(_:startingAt:from:)`), shuffle, and repeat (off / all / one). For radio, it fetches an up-next queue with `getRadioQueue(videoId:)`. The queue and current index are saved to `AppDefaults` and restored on launch.
+
+## Remote Controls
+
+`NowPlayingManager` registers `MPRemoteCommandCenter` handlers (play, pause, toggle, next, previous, seek) and routes them to `PlayerManager`. This covers media keys on macOS and the lock screen / Control Center / headphones on iOS.
 
 ## Background Audio
 
-### Window Close Behavior
-
-By default, closing a window destroys its view hierarchy, killing the WebView. We prevent this:
-
-```swift
-// AppDelegate.swift
-extension AppDelegate: NSWindowDelegate {
-    func windowShouldClose(_ sender: NSWindow) -> Bool {
-        sender.orderOut(nil)  // Hide instead of close
-        return false          // Don't actually close
-    }
-}
-```
-
-### App Lifecycle
-
-```swift
-func applicationShouldTerminateAfterLastWindowClosed(_:) -> Bool {
-    return false  // Keep app running when window hidden
-}
-```
-
-### Reopening Window
-
-```swift
-func applicationShouldHandleReopen(_:, hasVisibleWindows:) -> Bool {
-    if !hasVisibleWindows {
-        for window in NSApplication.shared.windows where window.canBecomeMain {
-            window.makeKeyAndOrderFront(nil)
-            return true
-        }
-    }
-    return true
-}
-```
-
-### Flow Summary
-
-| Action | Result |
-|--------|--------|
-| Close window (⌘W) | Window hides, audio continues |
-| Click dock icon | Window reappears, same audio |
-| Quit app (⌘Q) | App terminates, audio stops |
-
-## JavaScript Bridge
-
-### Observer Script
-
-Injected into every watch page:
-
-```javascript
-(function() {
-    'use strict';
-    const bridge = window.webkit.messageHandlers.singletonPlayer;
-    
-    function waitForPlayerBar() {
-        const playerBar = document.querySelector('ytmusic-player-bar');
-        if (playerBar) {
-            setupObserver(playerBar);
-            return;
-        }
-        setTimeout(waitForPlayerBar, 500);
-    }
-    
-    function setupObserver(playerBar) {
-        const observer = new MutationObserver(sendUpdate);
-        observer.observe(playerBar, {
-            attributes: true, characterData: true,
-            childList: true, subtree: true
-        });
-        sendUpdate();
-        setInterval(sendUpdate, 1000);
-    }
-    
-    function sendUpdate() {
-        const playPauseBtn = document.querySelector('.play-pause-button.ytmusic-player-bar');
-        const isPlaying = playPauseBtn?.getAttribute('title') === 'Pause';
-        const progressBar = document.querySelector('#progress-bar');
-        
-        bridge.postMessage({
-            type: 'STATE_UPDATE',
-            isPlaying: isPlaying,
-            progress: parseInt(progressBar?.getAttribute('value') || '0'),
-            duration: parseInt(progressBar?.getAttribute('aria-valuemax') || '0')
-        });
-    }
-    
-    waitForPlayerBar();
-})();
-```
-
-### Message Handler
-
-```swift
-func userContentController(_:, didReceive message: WKScriptMessage) {
-    guard let body = message.body as? [String: Any],
-          body["type"] as? String == "STATE_UPDATE" else { return }
-    
-    Task { @MainActor in
-        playerService.updatePlaybackState(
-            isPlaying: body["isPlaying"] as? Bool ?? false,
-            progress: Double(body["progress"] as? Int ?? 0),
-            duration: Double(body["duration"] as? Int ?? 0)
-        )
-    }
-}
-```
-
-## Mini Player UI
-
-A small toast in the bottom-right corner:
-
-| State | Size | Purpose |
-|-------|------|---------|
-| Visible | 160×90 | User clicks to interact |
-| Hidden | 1×1 | WebView stays in hierarchy |
-
-```swift
-.frame(
-    width: playerService.showMiniPlayer ? 160 : 1,
-    height: playerService.showMiniPlayer ? 90 : 1
-)
-```
-
-### Auto-Dismiss
-
-When playback starts, the mini player auto-dismisses:
-
-```swift
-// In Coordinator
-if isPlaying && playerService.showMiniPlayer {
-    playerService.confirmPlaybackStarted()
-}
-```
-
-## Common Issues
-
-### Multiple Audio Streams
-
-**Cause**: Multiple WebViews created
-
-**Solution**: Singleton pattern ensures one WebView
-
-### Audio Stops on Window Close
-
-**Cause**: WebView destroyed with view hierarchy
-
-**Solution**: `windowShouldClose` returns `false`, hides instead
-
-### Track Not Changing
-
-**Cause**: `updateNSView` not called
-
-**Solution**: Pass `videoId` as parameter to trigger SwiftUI updates
-
-### No Playback
-
-**Cause**: User interaction required by YouTube
-
-**Solution**: Mini player toast allows user to click play
-
-## User Agent
-
-We use Safari's user agent to avoid "browser not optimized" warnings:
-
-```swift
-static let userAgent = """
-    Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) \
-    AppleWebKit/605.1.15 (KHTML, like Gecko) \
-    Version/17.0 Safari/605.1.15
-    """
-```
-
-## Debugging
-
-Enable WebView inspector in Debug builds:
-
-```swift
-#if DEBUG
-    webView.isInspectable = true
-#endif
-```
-
-Right-click the mini player → "Inspect Element" to debug JavaScript.
-
-## Future Improvements
-
-- [ ] Queue management (next/previous)
-- [ ] Seek support via JavaScript
-- [ ] Volume control
-- [ ] Artwork extraction for Now Playing
+- **macOS:** closing the window hides the app; playback continues until ⌘Q.
+- **iOS:** the `audio` background mode in `Info.plist` keeps the Native and VLC engines playing. `BackgroundTaskHelper` wraps short async work (such as resolving the next stream) in a background task so it can finish while the app is suspended.

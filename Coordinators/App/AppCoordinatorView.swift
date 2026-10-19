@@ -27,7 +27,6 @@ struct AppCoordinatorView: View {
         ZStack(alignment: .bottomTrailing) {
             #if os(macOS)
             macOSMainContent()
-                .playerViewModel(coordinator.playerViewModel)
             #else
             iOSMainContent()
             #endif

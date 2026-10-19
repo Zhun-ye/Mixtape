@@ -54,3 +54,7 @@ final class HomeViewModel {
 ### Trade-offs Considered
 - **Dependency container**: Considered but adds complexity; default parameters achieve similar goals with less infrastructure
 - **Environment objects**: SwiftUI approach, but services need to work outside views
+
+## Update
+
+Dependencies are now provided by FactoryKit (`Container/Container.swift`, `@Injected`), superseding the default-argument `YTMusicClient.shared` pattern shown above (that symbol no longer exists). Additional protocols in `Services/Protocols.swift`: `WebKitManagerProtocol`, `SongLikeStatusManagerProtocol`, `LibraryRepositoryProtocol`, `DownloadManagerProtocol`. There is currently no test target, so the testability benefits are not exercised yet.

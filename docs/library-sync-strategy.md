@@ -1,5 +1,7 @@
 # Library Sync Strategy
 
+> **Status: Proposal — not implemented.** This is research for a future feature. Today `LibraryRepository` (`Services/LibraryRepository.swift`) keeps library playlists, albums, and artists in memory and loads them on demand with `load()` / `refresh()`. There is no disk cache, periodic sync, cooldown, sync status UI, or history sync. Liked songs are loaded separately by `LikedMusicViewModel`.
+
 Analysis of library synchronization patterns from OuterTune and Metrolist reference implementations.
 
 ## Overview

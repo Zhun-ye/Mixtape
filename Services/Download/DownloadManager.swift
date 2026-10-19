@@ -42,7 +42,7 @@ final class DownloadManager: NSObject, DownloadManagerProtocol {
     // MARK: - Constants
 
     private static let maxConcurrentDownloads = 3
-    private static let sessionIdentifier = "com.sertacozercan.Music.downloads"
+    private static let sessionIdentifier = "com.alexcding.mixtape.downloads"
 
     // MARK: - Private Properties
 

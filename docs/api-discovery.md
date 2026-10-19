@@ -1,6 +1,6 @@
 # YouTube Music API Reference
 
-> **Complete documentation of YouTube Music API endpoints for Music development.**
+> **Complete documentation of YouTube Music API endpoints for Mixtape development.**
 >
 > This document catalogs all known YouTube Music API endpoints, their authentication requirements, implementation status, and usage patterns. Use the standalone [API Explorer](../Tools/api-explorer.swift) tool for live endpoint testing.
 
@@ -30,7 +30,7 @@ The YouTube Music API (`youtubei/v1`) is an internal API used by the YouTube Mus
 |----------|-------|
 | Base URL | `https://music.youtube.com/youtubei/v1` |
 | Client Name | `WEB_REMIX` |
-| Client Version | `1.20231204.01.00` |
+| Client Version | `1.20250310.01.00` |
 | Protocol | HTTPS POST with JSON body |
 
 ### Endpoint Types
@@ -81,7 +81,13 @@ Browse endpoints use `POST /browse` with a `browseId` parameter.
 | `FEmusic_home` | Home | 🌐 | Personalized recommendations, mixes, quick picks | `HomeResponseParser` |
 | `FEmusic_explore` | Explore | 🌐 | New releases, charts, moods shortcuts | `HomeResponseParser` |
 | `FEmusic_liked_playlists` | Library Playlists | 🔐 | User's saved/created playlists | `PlaylistParser` |
-| `FEmusic_liked_videos` | Liked Songs | 🔐 | Songs user has liked | `PlaylistParser` |
+| `FEmusic_liked_videos` | Liked Songs | 🔐 | Songs user has liked (`getLikedSongs()`) | `PlaylistParser` |
+| `FEmusic_library_corpus_artists` | Library Artists | 🔐 | Subscribed artists (`getLibraryArtists()`) | `ArtistParser` |
+| `FEmusic_liked_albums` | Library Albums | 🔐 | Saved albums (`getLibraryAlbums()`) | `ArtistParser` |
+| `FEmusic_charts` | Charts | 🌐 | Top songs, albums, trending (`getCharts()` returns `HomeResponse`) | `HomeResponseParser` |
+| `FEmusic_moods_and_genres` | Moods & Genres | 🌐 | Mood/genre grids (`getMoodsAndGenres()`) | `HomeResponseParser` |
+| `FEmusic_new_releases` | New Releases | 🌐 | Recent albums, singles, videos (`getNewReleases()`) | `HomeResponseParser` |
+| `FEmusic_podcasts` | Podcasts | 🌐 | Podcast discovery (`getPodcasts()`) | `HomeResponseParser` |
 | `VL{playlistId}` | Playlist Detail | 🌐 | Playlist tracks and metadata | `PlaylistParser` |
 | `UC{channelId}` | Artist Detail | 🌐 | Artist page with songs, albums | `ArtistParser` |
 | `MPLYt{id}` | Lyrics | 🌐 | Song lyrics text | Custom parser |
@@ -151,15 +157,11 @@ let body = ["browseId": "FEmusic_liked_videos"]
 
 ### Available Browse Endpoints
 
-These endpoints are functional but not yet implemented in Music.
+These endpoints are functional but not yet implemented in Mixtape. Charts, Moods & Genres, and New Releases (documented below) are implemented and listed in the table above.
 
 | Browse ID | Name | Auth | Priority | Notes |
 |-----------|------|------|----------|-------|
-| `FEmusic_charts` | Charts | 🌐 | **High** | Top songs, albums by country/genre |
-| `FEmusic_moods_and_genres` | Moods & Genres | 🌐 | **High** | Browse by mood/genre grids |
-| `FEmusic_new_releases` | New Releases | 🌐 | **Medium** | Recent albums, singles, videos |
 | `FEmusic_history` | History | 🔐 | **High** | Recently played tracks |
-| `FEmusic_podcasts` | Podcasts | 🌐 | Low | Podcast discovery |
 | `FEmusic_library_landing` | Library Landing | 🔐 | Medium | Library overview |
 | `FEmusic_library_albums` | Library Albums | 🔐 | Medium | Requires auth + params* |
 | `FEmusic_library_artists` | Library Artists | 🔐 | Medium | Requires auth + params* |
@@ -186,10 +188,7 @@ let body = ["browseId": "FEmusic_charts"]
 - Genre-specific charts
 - Country-specific charts (via params)
 
-**Implementation suggestion**:
-```swift
-func getCharts(country: String? = nil) async throws -> ChartsResponse
-```
+**Implemented**: `getCharts()` returns `HomeResponse` (`Services/API/YTMusicClient.swift:93`)
 
 ---
 
@@ -204,6 +203,8 @@ let body = ["browseId": "FEmusic_moods_and_genres"]
 - Grid of genres (Pop, Rock, Hip-Hop, R&B, etc.)
 
 Each item links to a playlist or browse endpoint for that mood/genre.
+
+**Implemented**: `getMoodsAndGenres()` returns `HomeResponse`
 
 ---
 
@@ -231,6 +232,8 @@ let body = ["browseId": "FEmusic_new_releases"]
 - New singles
 - New music videos
 
+**Implemented**: `getNewReleases()` returns `HomeResponse`
+
 ---
 
 ## Action Endpoints
@@ -250,6 +253,10 @@ Action endpoints perform operations or fetch specific data.
 | `feedback` | Feedback | 🔐 | Add/remove from library via tokens |
 | `subscription/subscribe` | Subscribe | 🔐 | Subscribe to artist |
 | `subscription/unsubscribe` | Unsubscribe | 🔐 | Unsubscribe from artist |
+| `player` | Player | 🌐 | Video metadata, streaming URLs (`getPlayer()`) |
+| `account/account_menu` | Account Menu | 🔐 | Account info (`getAccountInfo()`, `AccountMenuParser`) |
+
+Playlists are added to / removed from the library via `like/like` and `like/removelike` with a `playlistId` target (`subscribeToPlaylist(playlistId:)`, `unsubscribeFromPlaylist(playlistId:)`). Artists use `subscription/subscribe` and `subscription/unsubscribe` (`subscribeToArtist(channelId:)`, `unsubscribeFromArtist(channelId:)`).
 
 ---
 
@@ -373,18 +380,18 @@ _ = try await request("subscription/subscribe", body: body)
 
 | Endpoint | Name | Auth | Priority | Notes |
 |----------|------|------|----------|-------|
-| `player` | Player | 🌐 | Medium | Video metadata, streaming URLs |
 | `music/get_queue` | Get Queue | 🌐 | **High** | Queue data for video IDs |
 | `playlist/get_add_to_playlist` | Add to Playlist | 🔐 | Medium | Get playlists for "Add to" menu |
 | `browse/edit_playlist` | Edit Playlist | 🔐 | Medium | Add/remove playlist tracks |
 | `playlist/create` | Create Playlist | 🔐 | Medium | Create new playlist |
 | `playlist/delete` | Delete Playlist | 🔐 | Low | Delete a playlist |
 | `guide` | Guide | 🌐 | Low | Sidebar structure |
-| `account/account_menu` | Account Menu | 🔐 | Low | Account settings |
 
 ---
 
 #### Player (`player`)
+
+Implemented as `getPlayer(videoId:playlistId:client:signatureTimestamp:)` (`Services/Protocols.swift:163`).
 
 ```swift
 let body = ["videoId": "dQw4w9WgXcQ"]
@@ -514,7 +521,7 @@ These endpoints were discovered through API exploration (2024-12-22) but are not
 | Endpoint | Type | Auth | Parameters | Description |
 |----------|------|------|------------|-------------|
 | `FEmusic_radio_builder` | Browse | 🌐 | - | Radio station builder UI data (form fields, artist selection) |
-| `FEmusic_liked_videos` | Browse | 🔐 | - | User's liked videos (alternative to `FEmusic_liked_videos`) |
+| `FEmusic_liked_videos` | Browse | 🔐 | - | User's liked videos (same browse ID used by `getLikedSongs()`) |
 
 ### Infrastructure/Internal Endpoints
 
@@ -571,7 +578,7 @@ X-Goog-AuthUser: 0
   "context": {
     "client": {
       "clientName": "WEB_REMIX",
-      "clientVersion": "1.20231204.01.00",
+      "clientVersion": "1.20250310.01.00",
       "hl": "en",
       "gl": "US"
     }
@@ -638,23 +645,23 @@ if let watchEndpoint = navEndpoint["watchEndpoint"] as? [String: Any],
 | Feature | Endpoint | Effort | Impact |
 |---------|----------|--------|--------|
 | History | `FEmusic_history` | Medium | High |
-| Charts | `FEmusic_charts` | Low | High |
-| Moods & Genres | `FEmusic_moods_and_genres` | Low | High |
+| Charts (done) | `FEmusic_charts` | Low | High |
+| Moods & Genres (done) | `FEmusic_moods_and_genres` | Low | High |
 | Queue Display | `music/get_queue` | Low | High |
 
 ### Phase 2: Library Enhancements
 
 | Feature | Endpoint | Effort | Impact |
 |---------|----------|--------|--------|
-| Library Albums | `FEmusic_library_albums` | Medium | Medium |
-| Library Artists | `FEmusic_library_artists` | Medium | Medium |
+| Library Albums (done) | `FEmusic_liked_albums` | Medium | Medium |
+| Library Artists (done) | `FEmusic_library_corpus_artists` | Medium | Medium |
 | Add to Playlist | `playlist/get_add_to_playlist` | Medium | Medium |
 
 ### Phase 3: Discovery
 
 | Feature | Endpoint | Effort | Impact |
 |---------|----------|--------|--------|
-| New Releases | `FEmusic_new_releases` | Low | Medium |
+| New Releases (done) | `FEmusic_new_releases` | Low | Medium |
 | Create Playlist | `playlist/create` | Medium | Medium |
 
 ---
@@ -697,7 +704,7 @@ chmod +x Tools/api-explorer.swift
 
 ### Authenticated Endpoints
 
-For authenticated endpoints (🔐), sign in to the Music app first:
+For authenticated endpoints (🔐), sign in to the Mixtape app first:
 
 ```bash
 # Check if cookies are available
@@ -709,7 +716,7 @@ For authenticated endpoints (🔐), sign in to the Music app first:
 ./Tools/api-explorer.swift browse FEmusic_library_albums ggMGKgQIARAA
 ```
 
-The tool reads cookies from `~/Library/Application Support/Music/cookies.dat`.
+The tool reads cookies from `~/Library/Application Support/Mixtape/cookies.dat`.
 
 ### Commands Reference
 
@@ -730,8 +737,6 @@ The tool reads cookies from `~/Library/Application Support/Music/cookies.dat`.
 |------|---------|
 | 🌐 | No authentication required |
 | 🔐 | Authentication required |
-| ✅ | Implemented in Music |
-| ⏳ | Not yet implemented |
 
 ---
 
