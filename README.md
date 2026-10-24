@@ -134,7 +134,7 @@ Add `-skipMacroValidation -skipPackagePluginValidation` to skip the macro trust 
 - **Coordinators** handle all navigation (`AppCoordinator` with Home, Discovery, Library, and Search children)
 - **Dependency injection** via [Factory](https://github.com/hmlongco/Factory); services are defined by protocols in `Services/Protocols.swift`
 - **API** — `YTMusicClient` talks to the YouTube Music InnerTube API using SAPISIDHASH authentication from browser cookies; response parsers live in `Services/API/Parsers/`
-- **Playback** — a persistent singleton `WKWebView` handles DRM-protected streams; the window hides rather than closes so audio keeps playing
+- **Playback** — `PlayerManager` drives one of three engines behind a `YTMusicPlayer` protocol: a persistent `WKWebView` (DRM handled by WebKit), `AVPlayer`, or VLCKit; on macOS the window hides rather than closes so audio keeps playing
 
 ```
 App/            App entry point and delegate
@@ -149,7 +149,7 @@ Resources/      Assets, localization, Info.plist, entitlements
 docs/           Design notes and ADRs
 ```
 
-More detail in [`docs/`](docs/), including [API discovery notes](docs/api-discovery.md), [playback](docs/playback.md), and [architecture decision records](docs/adr/).
+More detail in [`docs/`](docs/): [architecture](docs/architecture.md), [playback](docs/playback.md), [API discovery notes](docs/api-discovery.md), and [architecture decision records](docs/adr/).
 
 ## Acknowledgements
 

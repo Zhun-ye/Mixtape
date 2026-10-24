@@ -19,7 +19,7 @@ Problems with the monolithic approach:
 Extract parsing logic into a dedicated `Parsers/` module with specialized parsers for each response type:
 
 ```
-Core/Services/API/
+Services/API/
 ├── YTMusicClient.swift          # Networking only (~370 lines)
 ├── Parsers/
 │   ├── ParsingHelpers.swift     # Shared extraction utilities
@@ -55,3 +55,9 @@ Core/Services/API/
 | YTMusicClient lines | 1,766 | 370 |
 | Parsing test files | 0 | 4 |
 | Cyclomatic complexity | High | Reduced |
+
+## Update
+
+- Parsers now also include `AccountMenuParser`, `LyricsParser`, `RadioQueueParser`, `SearchSuggestionsParser`, and `SongMetadataParser`.
+- `YTMusicClient.swift` is now ~1,070 lines as more endpoints were added.
+- No tests exist currently; the parsing test files and "Testable parsing" benefit above are not realized in this repository.

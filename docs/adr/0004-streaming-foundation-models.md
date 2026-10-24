@@ -1,12 +1,12 @@
 # ADR 0004: Streaming Responses for Foundation Models
 
 **Date**: 2025-12-21  
-**Status**: Accepted  
+**Status**: Accepted (not implemented: no `streamResponse` calls exist in the current code)  
 **Context**: Foundation Models integration improvement  
 
 ## Context
 
-The Music app uses Apple's Foundation Models framework for on-device AI features including:
+Mixtape uses Apple's Foundation Models framework for on-device AI features including:
 - Natural language command parsing (CommandBar)
 - Lyrics explanation and analysis (LyricsView)
 - Playlist refinement suggestions (PlaylistDetailView)

@@ -59,14 +59,16 @@ Do check directives to ensure they emphasize positive "Do" guidance rather than 
 ## Build & Test Commands
 
 ```bash
-# Build
+# Dependencies (VLCKit)
+carthage bootstrap --use-xcframeworks --platform macOS,iOS --cache-builds
+
+# Build (macOS and iOS)
 xcodebuild -scheme Mixtape -destination 'platform=macOS' build
+xcodebuild -scheme Mixtape -destination 'generic/platform=iOS Simulator' build
+# Add -skipMacroValidation -skipPackagePluginValidation CODE_SIGNING_ALLOWED=NO for unattended builds
 
-# Run all tests
+# Run tests (once a test target exists)
 xcodebuild -scheme Mixtape -destination 'platform=macOS' test
-
-# Run unit tests only
-xcodebuild -scheme Mixtape -destination 'platform=macOS' test -only-testing:MixtapeTests
 
 # Lint & format (if available)
 swiftlint --strict && swiftformat .
@@ -74,11 +76,11 @@ swiftlint --strict && swiftformat .
 
 ## Architecture Overview
 
-**Mixtape** is a SwiftUI music streaming app for macOS 26.0+ for YouTube Music (via unofficial API). Uses Liquid Glass design language.
+**Mixtape** is a SwiftUI music streaming app for macOS 26.0+ and iOS 26.0+ for YouTube Music (via unofficial API). Uses Liquid Glass design language.
 
 ### Core Patterns
 
-- **Coordinator Pattern**: `AppCoordinator` manages navigation. Child coordinators: `HomeCoordinator`, `DiscoverCoordinator`, `LibraryCoordinator`, `SearchCoordinator`
+- **Coordinator Pattern**: `AppCoordinator` manages navigation. Child coordinators: `HomeCoordinator`, `DiscoveryCoordinator`, `LibraryCoordinator`, `SearchCoordinator`
 - **MVVM**: ViewModels are `@Observable @MainActor` classes with protocol-based service injection
 - **Dependency Injection**: FactoryKit container in `Container/Container.swift`. Register all services in the Container rather than using singletons
 
@@ -87,8 +89,8 @@ swiftlint --strict && swiftformat .
 | Service | Location | Purpose |
 |---------|----------|---------|
 | `YTMusicClient` | `Services/API/` | YouTube Music API client with SAPISIDHASH auth |
-| `AuthService` | `Services/Auth/` | Authentication state machine (loggedOut → loggingIn → loggedIn) |
-| `PlayerManager` | `Services/Player/` | Playback control via singleton WebView |
+| `AuthService` | `Services/Auth/` | Authentication state machine (initializing → loggedOut → loggingIn → loggedIn) |
+| `PlayerManager` | `Services/Player/` | Playback state; delegates audio to the selected engine (WebView, native, VLC) |
 | `WebKitManager` | `Services/WebKit/` | Cookie persistence and WebView configuration |
 | `NowPlayingManager` | `Services/Player/` | Media key integration via `MPRemoteCommandCenter` |
 | `FoundationModelsService` | `Services/AI/` | Apple Intelligence/Foundation Models integration |
@@ -100,31 +102,27 @@ Response parsing is modular in `Services/API/Parsers/`:
 - `SearchResponseParser.swift` - Search results
 - `PlaylistParser.swift` - Playlist details
 - `ArtistParser.swift` - Artist information
+- `LyricsParser`, `RadioQueueParser`, `SearchSuggestionsParser`, `SongMetadataParser`, `AccountMenuParser`
 - `ParsingHelpers.swift` - Shared utilities
 
 ### Playback Architecture
 
-Uses a singleton `WKWebView` that persists for app lifetime (`Views/MiniPlayerWebView.swift`). DRM handled natively by WebKit. Window hides instead of closes to maintain background audio (`AppDelegate`).
+`PlayerManager` delegates to a `YTMusicPlayer` engine chosen in Settings: `YTMusicWebPlayer` (singleton `WKWebView` in `Views/SingletonPlayerWebView.swift`, macOS only, DRM handled by WebKit), `YTMusicNativePlayer` (AVPlayer), or `VLCMusicPlayer` (VLCKit). The native and VLC engines resolve streams with `StreamFetcher`. On macOS the window hides instead of closing to keep audio playing (`AppDelegate`). See `docs/playback.md`.
 
 ### PlayerBar Integration
 
-The `PlayerBar` must be added to **every navigable view** via `safeAreaInset`:
+The `PlayerBar` is attached once at the root in `Coordinators/App/AppCoordinatorView.swift`, so individual views don't add it:
 
-```swift
-.safeAreaInset(edge: .bottom, spacing: 0) {
-    PlayerBar()
-}
-```
-
-Views pushed onto a `NavigationStack` don't inherit parent's `safeAreaInset`.
+- **macOS**: `.overlay(alignment: .bottom)` on the `NavigationSplitView`; the detail column reserves space with `.safeAreaPadding(.bottom, 100)`.
+- **iOS**: `.tabViewBottomAccessory` on the `TabView`, with `PlayerBarCover` for the expanded player.
 
 ### Persistent UI Elements
 
-Elements like the lyrics sidebar that must persist across navigation should be placed **outside** `NavigationSplitView` in `MainWindow`.
+Elements like the lyrics sidebar that must persist across navigation should be placed **outside** the per-tab `NavigationStack`s in `Coordinators/App/AppCoordinatorView.swift` (see `rightSidebarView()`).
 
 ## Testing
 
-Tests are in `Tests/MixtapeTests/` with helpers in `Helpers/` and fixtures in `Fixtures/`.
+There is no test target yet. When adding one, put tests in `Tests/MixtapeTests/`, with helpers in `Helpers/` and JSON fixtures in `Fixtures/`.
 
 For `@MainActor` test classes, use async setUp/tearDown **without calling super** (XCTestCase is not Sendable):
 
@@ -137,15 +135,15 @@ final class MyServiceTests: XCTestCase {
 }
 ```
 
-Use `MockYTMusicClient` for API mocking and `MockURLProtocol` for network-level mocking.
+Mock services through the protocols in `Services/Protocols.swift` (e.g. a `MockYTMusicClient` conforming to `YTMusicClientProtocol`) and register them on the FactoryKit `Container` in tests.
 
 ## Documentation
 
 Detailed docs in `/docs/`:
-- `architecture.md` - Full architecture guide with flow diagrams
+- `architecture.md` - Architecture guide: layout, DI, navigation, services
 - `api-discovery.md` - YouTube Music API reference
-- `playback.md` - WebView playback implementation
-- `testing.md` - Testing patterns and mocking
+- `playback.md` - Audio engines (WebView, native, VLC), downloads, background audio
+- `library-sync-strategy.md` - Proposal for library sync (not implemented)
 - `adr/` - Architecture Decision Records
 
 ## YouTube Music API Reference
